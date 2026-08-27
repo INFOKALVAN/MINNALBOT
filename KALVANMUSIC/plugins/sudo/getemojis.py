@@ -2,8 +2,8 @@ from pyrogram import filters
 from pyrogram.enums import MessageEntityType
 from pyrogram.types import Message
 
-from TPMusic import app
-from TPMusic.misc import SUDOERS
+from KALVANMUSIC import app
+from KALVANMUSIC.misc import SUDOERS
 
 
 @app.on_message(filters.command("getemojis") & SUDOERS)
