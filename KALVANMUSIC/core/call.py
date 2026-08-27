@@ -1,29 +1,20 @@
-# ═══════════════════════════════════════════════════════════
-#        😎  KALVAN MUSIC BOT  😎
-#   GitHub : github.com/ItsMeKalvan0/KalvanMusic
-#   Developer : @ItsMeKalvanBots | Telegram
-#   Module : Voice Chat Call Handler & Stream Manager
-# ═══════════════════════════════════════════════════════════
-
 import asyncio
-import logging
 import os
-import traceback
 from datetime import datetime, timedelta
 from typing import Union
 
-from ntgcalls import TelegramServerError
+from ntgcalls import TelegramServerError, ConnectionNotFound
 from pyrogram import Client
 from pyrogram.errors import FloodWait, ChatAdminRequired
+from pyrogram.types import InlineKeyboardMarkup
 from pytgcalls import PyTgCalls
-from pytgcalls.exceptions import NoActiveGroupCall
+from pytgcalls.exceptions import NoActiveGroupCall, NoAudioSourceFound, NoVideoSourceFound
 from pytgcalls.types import AudioQuality, ChatUpdate, MediaStream, StreamEnded, Update, VideoQuality
 
 import config
 from strings import get_string
 from KALVANMUSIC import LOGGER, YouTube, app
 from KALVANMUSIC.misc import db
-from KALVANMUSIC.utils.stream.autoplay import is_autoplay_on
 from KALVANMUSIC.utils.database import (
     add_active_chat,
     add_active_video_chat,
@@ -38,43 +29,32 @@ from KALVANMUSIC.utils.database import (
 )
 from KALVANMUSIC.utils.exceptions import AssistantErr
 from KALVANMUSIC.utils.formatters import check_duration, seconds_to_min, speed_converter
-from KALVANMUSIC.utils.inline.play import colored_stream_markup, colored_stream_markup_timer
-from KALVANMUSIC.utils.colored_buttons import buttons_to_inline_markup, smart_send_photo
+from KALVANMUSIC.utils.inline.play import stream_markup
 from KALVANMUSIC.utils.stream.autoclear import auto_clean
-
-logger = logging.getLogger(__name__)
-from KALVANMUSIC.utils.thumbnails import get_thumb, get_thumb_url
-from KALVANMUSIC.utils.errors import capture_internal_err, send_large_error
-from KALVANMUSIC.utils.pastebin import KALVANBIN
+from KALVANMUSIC.utils.thumbnails import get_thumb
+from KALVANMUSIC.utils.errors import capture_internal_err, capture_call_err
 
 autoend = {}
 counter = {}
 
 def dynamic_media_stream(path: str, video: bool = False, ffmpeg_params: str = None) -> MediaStream:
-    return MediaStream(
-        audio_path=path,
-        media_path=path,
-        audio_parameters=AudioQuality.STUDIO,
-        video_parameters=VideoQuality.HD_720p if video else VideoQuality.SD_360p,
-        video_flags=(MediaStream.Flags.AUTO_DETECT if video else MediaStream.Flags.IGNORE),
-        ffmpeg_parameters=ffmpeg_params,
-    )
-
-async def _colored_send_photo(original_chat_id, photo, caption, buttons, db_ref, chat_id, markup_type):
-    """Send photo with colored buttons via smart wrapper (auto fallback)."""
-    run = await smart_send_photo(
-        chat_id=original_chat_id,
-        photo=photo,
-        caption=caption,
-        reply_markup=buttons,
-    )
-    playlist = db.get(chat_id)
-    if playlist and len(playlist) > 0:
-        playlist[0]["mystic"] = run
-        playlist[0]["markup"] = markup_type
-        playlist[0]["base_caption"] = caption
-    return run
-
+    if video:
+        return MediaStream(
+            media_path=path,
+            audio_parameters=AudioQuality.HIGH,
+            video_parameters=VideoQuality.HD_720p,
+            audio_flags=MediaStream.Flags.REQUIRED,
+            video_flags=MediaStream.Flags.REQUIRED,
+            ffmpeg_parameters=ffmpeg_params,
+        )
+    else:
+        return MediaStream(
+            media_path=path,
+            audio_parameters=AudioQuality.HIGH,
+            audio_flags=MediaStream.Flags.REQUIRED,
+            video_flags=MediaStream.Flags.IGNORE,
+            ffmpeg_parameters=ffmpeg_params,
+        )
 
 async def _clear_(chat_id: int) -> None:
     popped = db.pop(chat_id, None)
@@ -88,54 +68,54 @@ async def _clear_(chat_id: int) -> None:
 class Call:
     def __init__(self):
         self.userbot1 = Client(
-            "KalvanXAssis1", config.API_ID, config.API_HASH, session_string=config.STRING1
+            "TPAssis1", config.API_ID, config.API_HASH, session_string=config.STRING1
         ) if config.STRING1 else None
         self.one = PyTgCalls(self.userbot1) if self.userbot1 else None
 
         self.userbot2 = Client(
-            "KalvanXAssis2", config.API_ID, config.API_HASH, session_string=config.STRING2
+            "TPAssis2", config.API_ID, config.API_HASH, session_string=config.STRING2
         ) if config.STRING2 else None
         self.two = PyTgCalls(self.userbot2) if self.userbot2 else None
 
         self.userbot3 = Client(
-            "KalvanXAssis3", config.API_ID, config.API_HASH, session_string=config.STRING3
+            "TPAssis3", config.API_ID, config.API_HASH, session_string=config.STRING3
         ) if config.STRING3 else None
         self.three = PyTgCalls(self.userbot3) if self.userbot3 else None
 
         self.userbot4 = Client(
-            "KalvanXAssis4", config.API_ID, config.API_HASH, session_string=config.STRING4
+            "TPAssis4", config.API_ID, config.API_HASH, session_string=config.STRING4
         ) if config.STRING4 else None
         self.four = PyTgCalls(self.userbot4) if self.userbot4 else None
 
         self.userbot5 = Client(
-            "KalvanXAssis5", config.API_ID, config.API_HASH, session_string=config.STRING5
+            "TPAssis5", config.API_ID, config.API_HASH, session_string=config.STRING5
         ) if config.STRING5 else None
         self.five = PyTgCalls(self.userbot5) if self.userbot5 else None
 
         self.active_calls: set[int] = set()
 
 
-    @capture_internal_err
+    @capture_call_err
     async def pause_stream(self, chat_id: int) -> None:
         assistant = await group_assistant(self, chat_id)
         await assistant.pause(chat_id)
 
-    @capture_internal_err
+    @capture_call_err
     async def resume_stream(self, chat_id: int) -> None:
         assistant = await group_assistant(self, chat_id)
         await assistant.resume(chat_id)
 
-    @capture_internal_err
+    @capture_call_err
     async def mute_stream(self, chat_id: int) -> None:
         assistant = await group_assistant(self, chat_id)
         await assistant.mute(chat_id)
 
-    @capture_internal_err
+    @capture_call_err
     async def unmute_stream(self, chat_id: int) -> None:
         assistant = await group_assistant(self, chat_id)
         await assistant.unmute(chat_id)
 
-    @capture_internal_err
+    @capture_call_err
     async def stop_stream(self, chat_id: int) -> None:
         assistant = await group_assistant(self, chat_id)
         await _clear_(chat_id)
@@ -149,7 +129,7 @@ class Call:
             self.active_calls.discard(chat_id)
 
 
-    @capture_internal_err
+    @capture_call_err
     async def force_stop_stream(self, chat_id: int) -> None:
         assistant = await group_assistant(self, chat_id)
         try:
@@ -171,7 +151,7 @@ class Call:
             self.active_calls.discard(chat_id)
 
 
-    @capture_internal_err
+    @capture_call_err
     async def skip_stream(self, chat_id: int, link: str, video: Union[bool, str] = None, image: Union[bool, str] = None) -> None:
         assistant = await group_assistant(self, chat_id)
         stream = dynamic_media_stream(path=link, video=bool(video))
@@ -183,7 +163,7 @@ class Call:
         participants = await assistant.get_participants(chat_id)
         return [p.user_id for p in participants if not p.is_muted]
 
-    @capture_internal_err
+    @capture_call_err
     async def seek_stream(self, chat_id: int, file_path: str, to_seek: str, duration: str, mode: str) -> None:
         assistant = await group_assistant(self, chat_id)
         ffmpeg_params = f"-ss {to_seek} -to {duration}"
@@ -191,7 +171,7 @@ class Call:
         stream = dynamic_media_stream(path=file_path, video=is_video, ffmpeg_params=ffmpeg_params)
         await assistant.play(chat_id, stream)
 
-    @capture_internal_err
+    @capture_call_err
     async def speedup_stream(self, chat_id: int, file_path: str, speed: float, playing: list) -> None:
         if not isinstance(playing, list) or not playing or not isinstance(playing[0], dict):
             raise AssistantErr("Invalid stream info for speedup.")
@@ -204,8 +184,12 @@ class Call:
 
         if not os.path.exists(out):
             vs = str(2.0 / float(speed))
-            cmd = f'ffmpeg -i "{file_path}" -filter:v setpts={vs}*PTS -filter:a atempo={speed} "{out}"'
-            proc = await asyncio.create_subprocess_shell(cmd, stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            cmd = f'ffmpeg -i "{file_path}" -filter:v "setpts={vs}*PTS" -filter:a atempo={speed} -y "{out}"'
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
             await proc.communicate()
 
         dur = int(await asyncio.get_event_loop().run_in_executor(None, check_duration, out))
@@ -217,21 +201,20 @@ class Call:
 
         if chat_id in db and db[chat_id] and db[chat_id][0].get("file") == file_path:
             await assistant.play(chat_id, stream)
+            db[chat_id][0].update({
+                "played": con_seconds,
+                "dur": duration_min,
+                "seconds": dur,
+                "speed_path": out,
+                "speed": speed,
+                "old_dur": db[chat_id][0].get("dur"),
+                "old_second": db[chat_id][0].get("seconds"),
+            })
         else:
             raise AssistantErr("Stream mismatch during speedup.")
 
-        db[chat_id][0].update({
-            "played": con_seconds,
-            "dur": duration_min,
-            "seconds": dur,
-            "speed_path": out,
-            "speed": speed,
-            "old_dur": db[chat_id][0].get("dur"),
-            "old_second": db[chat_id][0].get("seconds"),
-        })
 
-
-    @capture_internal_err
+    @capture_call_err
     async def stream_call(self, link: str) -> None:
         assistant = await group_assistant(self, config.LOGGER_ID)
         try:
@@ -243,7 +226,7 @@ class Call:
             except:
                 pass
 
-    @capture_internal_err
+    @capture_call_err
     async def join_call(
         self,
         chat_id: int,
@@ -261,7 +244,11 @@ class Call:
             await assistant.play(chat_id, stream)
         except (NoActiveGroupCall, ChatAdminRequired):
             raise AssistantErr(_["call_8"])
-        except TelegramServerError:
+        except NoAudioSourceFound:
+            raise AssistantErr(_["call_11"])
+        except NoVideoSourceFound:
+            raise AssistantErr(_["call_12"])
+        except (ConnectionNotFound, TelegramServerError):
             raise AssistantErr(_["call_10"])
         except Exception as e:
             raise AssistantErr(
@@ -286,75 +273,24 @@ class Call:
         popped = None
         loop = await get_loop(chat_id)
         try:
-            # Check if check exists and has items before accessing
-            if not check or not isinstance(check, list):
-                return
             if loop == 0:
-                if len(check) == 0:
-                    return
                 popped = check.pop(0)
             else:
                 loop = loop - 1
                 await set_loop(chat_id, loop)
             await auto_clean(popped)
-            if not check or not isinstance(check, list) or len(check) == 0:
-                # Store popped data BEFORE _clear_() because _clear_() wipes db[chat_id]
-                last_title = popped.get("title", "") if popped else ""
-                last_vidid = popped.get("vidid", "") if popped else ""
-                last_chat_id = popped.get("chat_id", chat_id) if popped else chat_id
-                last_video = (popped.get("streamtype") == "video") if popped else False
-
-            # _clear_() marks the chat inactive in DB (is_active_chat()=False).
-            # This is intentional: stream() inside auto_play_next() checks
-            # is_active_chat() to decide whether to "just queue" or to
-            # actually download + join_call + play. We NEED it to be False
-            # here so stream() takes the "start fresh" path and calls
-            # join_call() → assistant.play() to start the new stream.
-            # (If is_active_chat() were True, stream() would only add
-            # the song to queue without playing it — nothing would start.)
-            await _clear_(chat_id)
-
-            autoplay_started = False
-            if last_title and await is_autoplay_on(chat_id):
-                try:
-                    from KALVANMUSIC.utils.stream.autoplay import auto_play_next
-                    from KALVANMUSIC.utils.database import is_active_chat as _is_chat_active
-
-                    autoplay_started = await auto_play_next(
-                        chat_id,
-                        last_chat_id,
-                        last_title,
-                        last_vidid,
-                        video=last_video,
-                    )
-
-                    # Verify the stream actually started.
-                    # auto_play_next() can return True even when stream()
-                    # silently failed — join_call() has @capture_internal_err
-                    # which swallows its internal AssistantErr and returns
-                    # None. stream() then still runs put_queue() and sends
-                    # a "now playing" photo, but nothing is actually playing.
-                    # A successful join_call() always calls add_active_chat(),
-                    # so is_active_chat()=False means the join silently failed.
-                    if autoplay_started and not await _is_chat_active(chat_id):
-                        autoplay_started = False
-
-                except Exception:
-                    autoplay_started = False
-
-            # DON'T leave call if autoplay failed - assistant should stay in VC
-            # Only leave if autoplay is disabled (not attempted)
-            if not autoplay_started and not await is_autoplay_on(chat_id):
-                if chat_id in self.active_calls:
-                    try:
-                        await client.leave_call(chat_id)
-                    except NoActiveGroupCall:
-                        pass
-                    except Exception:
-                        pass
-                    finally:
-                        self.active_calls.discard(chat_id)
-            return
+            if not check:
+                    await _clear_(chat_id)
+                    if chat_id in self.active_calls:
+                        try:
+                            await client.leave_call(chat_id)
+                        except NoActiveGroupCall:
+                            pass
+                        except Exception:
+                            pass
+                        finally:
+                            self.active_calls.discard(chat_id)
+                    return
         except:
             try:
                 await _clear_(chat_id)
@@ -362,30 +298,24 @@ class Call:
             except:
                 return
         else:
-            if not check or not isinstance(check, list) or len(check) == 0:
-                return
-            queued = check[0].get("file")
-            if not queued:
-                return
+            queued = check[0]["file"]
             language = await get_lang(chat_id)
             _ = get_string(language)
-            title = (check[0].get("title", "")).title()
-            user = check[0].get("by", "")
-            original_chat_id = check[0].get("chat_id", chat_id)
-            streamtype = check[0].get("streamtype", "")
-            videoid = check[0].get("vidid", "")
-            if db.get(chat_id) and len(db[chat_id]) > 0:
-                db[chat_id][0]["played"] = 0
+            title = (check[0]["title"]).title()
+            user = check[0]["by"]
+            original_chat_id = check[0]["chat_id"]
+            streamtype = check[0]["streamtype"]
+            videoid = check[0]["vidid"]
+            db[chat_id][0]["played"] = 0
 
-            exis = check[0].get("old_dur") if check and len(check) > 0 else None
-            if exis and db.get(chat_id) and len(db[chat_id]) > 0:
+            exis = (check[0]).get("old_dur")
+            if exis:
                 db[chat_id][0]["dur"] = exis
-                db[chat_id][0]["seconds"] = check[0].get("old_second") if check and len(check) > 0 else 0
+                db[chat_id][0]["seconds"] = check[0]["old_second"]
                 db[chat_id][0]["speed_path"] = None
                 db[chat_id][0]["speed"] = 1.0
 
             video = True if str(streamtype) == "video" else False
-            ap_status = await is_autoplay_on(chat_id)
 
             if "live_" in queued:
                 n, link = await YouTube.video(videoid, True)
@@ -398,44 +328,32 @@ class Call:
                 except Exception:
                     return await app.send_message(original_chat_id, text=_["call_6"])
 
-                img = await get_thumb_url(videoid)  # Use URL for colored buttons
-                button = colored_stream_markup(_, chat_id, autoplay_status=ap_status)
-                await _colored_send_photo(original_chat_id, img, _["stream_1"].format(
+                img = await get_thumb(videoid)
+                button = stream_markup(_, chat_id)
+                run = await app.send_photo(
+                    chat_id=original_chat_id,
+                    photo=img,
+                    caption=_["stream_1"].format(
                         f"https://t.me/{app.username}?start=info_{videoid}",
                         title[:23],
                         check[0]["dur"],
                         user,
-                    ), button, None, chat_id, "tg")
+                    ),
+                    reply_markup=InlineKeyboardMarkup(button),
+                )
+                db[chat_id][0]["mystic"] = run
+                db[chat_id][0]["markup"] = "tg"
 
             elif "vid_" in queued:
                 mystic = await app.send_message(original_chat_id, _["call_7"])
-                
-                # Retry logic for YouTube download failures
-                max_retries = 3
-                download_success = False
-                file_path = None
-                direct = False
-
-                for attempt in range(max_retries):
-                    try:
-                        file_path, direct = await YouTube.download(
-                            videoid,
-                            mystic,
-                            videoid=True,
-                            video=True if str(streamtype) == "video" else False,
-                        )
-                        if file_path:
-                            download_success = True
-                            break
-                    except:
-                        if attempt < max_retries - 1:
-                            continue
-                        else:
-                            return await mystic.edit_text(
-                                _["call_6"], disable_web_page_preview=True
-                            )
-
-                if not download_success or not file_path:
+                try:
+                    file_path, direct = await YouTube.download(
+                        videoid,
+                        mystic,
+                        videoid=True,
+                        video=True if str(streamtype) == "video" else False,
+                    )
+                except:
                     return await mystic.edit_text(
                         _["call_6"], disable_web_page_preview=True
                     )
@@ -446,15 +364,22 @@ class Call:
                 except:
                     return await app.send_message(original_chat_id, text=_["call_6"])
 
-                img = await get_thumb_url(videoid)  # Use URL for colored buttons
-                button = colored_stream_markup(_, chat_id, autoplay_status=ap_status)
+                img = await get_thumb(videoid)
+                button = stream_markup(_, chat_id)
                 await mystic.delete()
-                await _colored_send_photo(original_chat_id, img, _["stream_1"].format(
+                run = await app.send_photo(
+                    chat_id=original_chat_id,
+                    photo=img,
+                    caption=_["stream_1"].format(
                         f"https://t.me/{app.username}?start=info_{videoid}",
                         title[:23],
                         check[0]["dur"],
                         user,
-                    ), button, None, chat_id, "stream")
+                    ),
+                    reply_markup=InlineKeyboardMarkup(button),
+                )
+                db[chat_id][0]["mystic"] = run
+                db[chat_id][0]["markup"] = "stream"
 
             elif "index_" in queued:
                 stream = dynamic_media_stream(path=videoid, video=video)
@@ -463,8 +388,15 @@ class Call:
                 except:
                     return await app.send_message(original_chat_id, text=_["call_6"])
 
-                button = colored_stream_markup(_, chat_id, autoplay_status=ap_status)
-                await _colored_send_photo(original_chat_id, config.STREAM_IMG_URL, _["stream_2"].format(user), button, None, chat_id, "tg")
+                button = stream_markup(_, chat_id)
+                run = await app.send_photo(
+                    chat_id=original_chat_id,
+                    photo=config.STREAM_IMG_URL,
+                    caption=_["stream_2"].format(user),
+                    reply_markup=InlineKeyboardMarkup(button),
+                )
+                db[chat_id][0]["mystic"] = run
+                db[chat_id][0]["markup"] = "tg"
 
             else:
                 stream = dynamic_media_stream(path=queued, video=video)
@@ -474,46 +406,66 @@ class Call:
                     return await app.send_message(original_chat_id, text=_["call_6"])
 
                 if videoid == "telegram":
-                    button = colored_stream_markup(_, chat_id, autoplay_status=ap_status)
-                    photo = config.TELEGRAM_AUDIO_URL if str(streamtype) == "audio" else config.TELEGRAM_VIDEO_URL
-                    await _colored_send_photo(original_chat_id, photo, _["stream_1"].format(
-                            config.SUPPORT_CHAT, title[:23], check[0]["dur"], user,
-                        ), button, None, chat_id, "tg")
+                    button = stream_markup(_, chat_id)
+                    run = await app.send_photo(
+                        chat_id=original_chat_id,
+                        photo=(
+                            config.TELEGRAM_AUDIO_URL
+                            if str(streamtype) == "audio"
+                            else config.TELEGRAM_VIDEO_URL
+                        ),
+                        caption=_["stream_1"].format(
+                            config.SUPPORT_CHAT, title[:23], check[0]["dur"], user
+                        ),
+                        reply_markup=InlineKeyboardMarkup(button),
+                    )
+                    db[chat_id][0]["mystic"] = run
+                    db[chat_id][0]["markup"] = "tg"
 
                 elif videoid == "soundcloud":
-                    button = colored_stream_markup(_, chat_id, autoplay_status=ap_status)
-                    await _colored_send_photo(original_chat_id, config.SOUNCLOUD_IMG_URL, _["stream_1"].format(
-                            config.SUPPORT_CHAT, title[:23], check[0]["dur"], user,
-                        ), button, None, chat_id, "tg")
+                    button = stream_markup(_, chat_id)
+                    run = await app.send_photo(
+                        chat_id=original_chat_id,
+                        photo=config.SOUNCLOUD_IMG_URL,
+                        caption=_["stream_1"].format(
+                            config.SUPPORT_CHAT, title[:23], check[0]["dur"], user
+                        ),
+                        reply_markup=InlineKeyboardMarkup(button),
+                    )
+                    db[chat_id][0]["mystic"] = run
+                    db[chat_id][0]["markup"] = "tg"
 
                 else:
-                    img = await get_thumb_url(videoid)  # Use URL for colored buttons
-                    button = colored_stream_markup(_, chat_id, autoplay_status=ap_status)
-                    caption = _["stream_1"].format(
-                        f"https://t.me/{app.username}?start=info_{videoid}",
-                        title[:23], check[0]["dur"], user,
-                    )
+                    img = await get_thumb(videoid)
+                    button = stream_markup(_, chat_id)
                     try:
-                        run = await smart_send_photo(
+                        run = await app.send_photo(
                             chat_id=original_chat_id,
                             photo=img,
-                            caption=caption,
-                            reply_markup=button,
+                            caption=_["stream_1"].format(
+                                f"https://t.me/{app.username}?start=info_{videoid}",
+                                title[:23],
+                                check[0]["dur"],
+                                user,
+                            ),
+                            reply_markup=InlineKeyboardMarkup(button),
                         )
                     except FloodWait as e:
                         LOGGER(__name__).warning(f"FloodWait: Sleeping for {e.value}")
                         await asyncio.sleep(e.value)
-                        run = await smart_send_photo(
+                        run = await app.send_photo(
                             chat_id=original_chat_id,
                             photo=img,
-                            caption=caption,
-                            reply_markup=button,
+                            caption=_["stream_1"].format(
+                                f"https://t.me/{app.username}?start=info_{videoid}",
+                                title[:23],
+                                check[0]["dur"],
+                                user,
+                            ),
+                            reply_markup=InlineKeyboardMarkup(button),
                         )
-                    playlist = db.get(chat_id)
-                    if playlist and isinstance(playlist, list) and len(playlist) > 0:
-                        playlist[0]["mystic"] = run
-                        playlist[0]["markup"] = "stream"
-                        playlist[0]["base_caption"] = caption
+                    db[chat_id][0]["mystic"] = run
+                    db[chat_id][0]["markup"] = "stream"
 
 
     async def start(self) -> None:
@@ -552,54 +504,22 @@ class Call:
             ChatUpdate.Status.KICKED
             | ChatUpdate.Status.LEFT_GROUP
             | ChatUpdate.Status.CLOSED_VOICE_CHAT
-            | ChatUpdate.Status.DISCARDED_CALL
-            | ChatUpdate.Status.BUSY_CALL
         )
 
         async def unified_update_handler(client, update: Update) -> None:
-            try:
-                if isinstance(update, ChatUpdate):
-                    status = update.status
-                    if (status & ChatUpdate.Status.LEFT_CALL) or (status & CRITICAL):
-                        await self.stop_stream(update.chat_id)
-                        return
-
-                elif isinstance(update, StreamEnded):
-                    # Handle both AUDIO and VIDEO stream endings.
-                    # The original AUDIO-only guard meant video streams never
-                    # triggered queue advance or autoplay.
+            if isinstance(update, StreamEnded):
+                if update.stream_type == StreamEnded.Type.AUDIO:
                     assistant = await group_assistant(self, update.chat_id)
                     await self.play(assistant, update.chat_id)
 
-            except Exception:
-                import sys, traceback
-                exc_type, exc_obj, exc_tb = sys.exc_info()
-                err_msg = str(exc_obj)[:200]
-                caption = (
-                    f"🚨 <b>Stream Error</b>\n"
-                    f"📍 <b>Type:</b> <code>{exc_type.__name__}</code>\n"
-                    f"💬 <b>Error:</b> <code>{err_msg}</code>\n"
-                    f"📌 <b>Chat:</b> <code>{getattr(update, 'chat_id', '?')}</code>"
-                )
-                try:
-                    full_trace = "".join(traceback.format_exception(exc_type, exc_obj, exc_tb))
-                    paste_url = await KALVANBIN(full_trace)
-                    if paste_url:
-                        caption += f"\n🔗 <b>Log:</b> {paste_url}"
-                except Exception:
-                    pass
-                try:
-                    await app.send_message(config.LOGGER_ID, caption)
-                except Exception:
-                    pass
+            elif isinstance(update, ChatUpdate):
+                status = update.status
+                if (status & ChatUpdate.Status.LEFT_CALL) or (status & CRITICAL):
+                    await self.stop_stream(update.chat_id)
+                    return
 
         for assistant in assistants:
             assistant.on_update()(unified_update_handler)
 
 
-KALVAN = Call()
-
-# ═══════════════════════════════════════════════════════════
-#        😎  KALVAN MUSIC BOT  😎
-#   github.com/ItsMeKalvan0/KalvanMusic
-# ═══════════════════════════════════════════════════════════
+StreamController = Call()
