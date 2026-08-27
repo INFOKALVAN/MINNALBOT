@@ -14,9 +14,9 @@ from pyrogram.types import (
 from pyrogram.errors import UserIsBlocked, PeerIdInvalid, RPCError
 
 import config
-from TPMusic import app
-from TPMusic.logging import LOGGER
-from TPMusic.mongo import joinreq_db as db
+from KALVANMUSIC import app
+from KALVANMUSIC.logging import LOGGER
+from KALVANMUSIC.mongo import joinreq_db as db
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
