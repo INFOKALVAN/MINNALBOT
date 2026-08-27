@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
-from TPMusic.core.mongo import mongodb
+from KALVANMUSIC.core.mongo import mongodb
 
 _col = mongodb["join_requests"]
 
